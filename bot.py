@@ -12,6 +12,8 @@ from aiohttp import web
 from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+import filelink
+
 # ───────────────────────── CONFIG ─────────────────────────
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
@@ -29,7 +31,7 @@ app = Client("leechbot", api_id=API_ID, api_hash=API_HASH,
              bot_token=BOT_TOKEN, in_memory=True)
 aria = aria2p.API(aria2p.Client(host="http://localhost", port=6800, secret=""))
 
-QUEUE = asyncio.Semaphore(1)        # one job at a time (small disk)
+QUEUE = asyncio.Semaphore(1)        # one job at a time
 TASKS = {}
 
 
@@ -132,8 +134,9 @@ def purge(keep=None):
 # ───────────────────────── /start + buttons ─────────────────────────
 START_TEXT = (
     "👋 **Hello {name}!**\n\n"
-    "Mama Magnet leech bot. Magnet ekak evanna:\n"
-    "`/leech magnet:?xt=...`"
+    "Mama Magnet leech + File-to-Link bot.\n\n"
+    "🧲 `/leech magnet:?xt=...` - magnet download & upload\n"
+    "🔗 File ekakata reply karala `/genlink` - direct link"
 )
 
 
@@ -174,10 +177,12 @@ async def cb(_, q):
     if d == "help":
         await q.answer()
         await q.message.edit_text(
-            "📖 **Help**\n\n`/leech <magnet>` - download & upload (file by file)\n"
+            "📖 **Help**\n\n"
+            "`/leech <magnet>` - download & upload\n"
             "Aliases: /qbleech1, /magent, /magnet\n"
+            "`/genlink` - file ekakata reply karanna, direct link ekak denawa\n"
             "`/disk` - free disk space\n`/id` - your Telegram ID\n\n"
-            "Parts walata split una files join karanna: `cat file.mkv.* > file.mkv`",
+            "Split una files join karanna: `cat file.mkv.* > file.mkv`",
             reply_markup=back_kb())
     elif d == "about":
         await q.answer()
@@ -259,12 +264,14 @@ def list_files(tpath):
     return files
 
 
-async def download_file(status, task, tpath, idx, n, total, rel):
+async def download_files(status, task, tpath, sel, title, rel=None):
+    """sel = "3" (one file) or "1,2,5" (many). Returns path of the file if rel is given."""
     d = aria.add_torrent(tpath, options={
-        "dir": DL_DIR, "select-file": str(idx),
+        "dir": DL_DIR, "select-file": sel,
         "seed-time": "0", "bt-stop-timeout": "900"})
     task.gid = d.gid
     last = 0
+    shown = f"`{os.path.basename(rel)}`\n\n" if rel else "\n"
     while True:
         await asyncio.sleep(3)
         check_cancel(task)
@@ -281,7 +288,7 @@ async def download_file(status, task, tpath, idx, n, total, rel):
             last = time.time()
             await safe_edit(
                 status,
-                f"📥 **Downloading** ({n}/{total})\n`{os.path.basename(rel)}`\n\n"
+                f"📥 **{title}**\n{shown}"
                 f"[{bar(d.progress)}] {d.progress:.1f}%\n"
                 f"📦 {d.completed_length_string()} / {d.total_length_string()}\n"
                 f"⚡ {d.download_speed_string()}  ⏱ {d.eta_string()}\n"
@@ -295,6 +302,8 @@ async def download_file(status, task, tpath, idx, n, total, rel):
         pass
     drop_result(task.gid)
     task.gid = None
+    if not rel:
+        return None
     path = os.path.join(DL_DIR, rel)
     if not os.path.exists(path):
         raise RuntimeError(f"File eka hambune na: {rel}")
@@ -372,20 +381,41 @@ async def run_task(m, status, task, magnet):
         raise RuntimeError("Torrent eke download karanna files na")
 
     total = len(files)
+    all_size = sum(length for _, _, length in files)
     done, skipped = 0, []
-    for n, (idx, rel, length) in enumerate(files, 1):
-        check_cancel(task)
-        if needed(length) > free_bytes():
-            skipped.append(f"{os.path.basename(rel)} ({hsize(length)})")
-            continue
-        path = await download_file(status, task, tpath, idx, n, total, rel)
-        await upload_path(m, status, task, path, n, total)
-        purge(keep=tpath)
-        done += 1
+
+    if all_size + SPLIT + MARGIN <= free_bytes():
+        # Disk eka madi: full torrent ekama ekapara download, passe eka eka upload
+        sel = ",".join(str(i) for i, _, _ in files)
+        await download_files(status, task, tpath, sel, "Downloading all files")
+        for n, (idx, rel, length) in enumerate(files, 1):
+            check_cancel(task)
+            path = os.path.join(DL_DIR, rel)
+            if not os.path.exists(path):
+                skipped.append(os.path.basename(rel))
+                continue
+            await upload_path(m, status, task, path, n, total)
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+            done += 1
+    else:
+        # Disk madi na: file eka eka download -> upload -> delete
+        for n, (idx, rel, length) in enumerate(files, 1):
+            check_cancel(task)
+            if needed(length) > free_bytes():
+                skipped.append(f"{os.path.basename(rel)} ({hsize(length)})")
+                continue
+            path = await download_files(status, task, tpath, str(idx),
+                                        f"Downloading ({n}/{total})", rel)
+            await upload_path(m, status, task, path, n, total)
+            purge(keep=tpath)
+            done += 1
 
     msg = f"🎉 **Complete!** {done}/{total} files uploaded."
     if skipped:
-        msg += "\n\n⚠️ Disk madi nisa skip una:\n" + "\n".join(f"• `{s}`" for s in skipped[:10])
+        msg += "\n\n⚠️ Skip una:\n" + "\n".join(f"• `{s}`" for s in skipped[:10])
     await safe_edit(status, msg)
 
 
@@ -444,8 +474,12 @@ async def main():
     os.makedirs(DL_DIR, exist_ok=True)
     await wait_for_aria()
     await app.start()
+    await filelink.prepare(app)
+
     web_app = web.Application()
     web_app.router.add_get("/", health)
+    filelink.register(app, web_app, authorized)
+
     runner = web.AppRunner(web_app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8000))).start()
