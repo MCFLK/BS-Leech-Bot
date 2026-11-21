@@ -12,6 +12,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 BIN_CHANNEL = int(os.environ.get("BIN_CHANNEL", "0"))     # private storage channel id (-100...)
+BIN_HASH = int(os.environ.get("BIN_CHANNEL_HASH", "0"))   # channel access hash (get it with /bininfo)
 BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")     # https://your-app.koyeb.app
 PUBLIC_LINKS = os.environ.get("PUBLIC_LINKS", "0") == "1"  # 1 = anyone can use /genlink
 CHUNK = 1024 * 1024                                       # Pyrogram stream_media chunk size
@@ -64,6 +65,17 @@ def register(app, web_app, authorized):
                 InlineKeyboardButton("▶️ Stream", url=st)]]))
 
     app.add_handler(MessageHandler(genlink, filters.command("genlink") & filters.reply))
+
+    async def bininfo(_, m):
+        if not m.from_user or not authorized(m.from_user.id):
+            return
+        try:
+            peer = await app.storage.get_peer_by_id(BIN_CHANNEL)
+            await m.reply_text(f"`BIN_CHANNEL_HASH` = `{peer.access_hash}`")
+        except KeyError:
+            await m.reply_text("Channel eka cache wela na. Channel ekata message ekak danna, passe aye /bininfo.")
+
+    app.add_handler(MessageHandler(bininfo, filters.command("bininfo")))
 
     # ───────────── HTTP streaming ─────────────
     async def serve(request, inline):
@@ -150,6 +162,11 @@ async def prepare(app):
     """Call after app.start(): make Pyrogram resolve the storage channel."""
     if not BIN_CHANNEL:
         return
+    if BIN_HASH:
+        try:
+            await app.storage.update_peers([(BIN_CHANNEL, BIN_HASH, "channel", None, None)])
+        except Exception as e:
+            print(f"[filelink] hash inject una na: {e}")
     try:
         await app.get_chat(BIN_CHANNEL)
     except Exception as e:
