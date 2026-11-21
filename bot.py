@@ -13,6 +13,7 @@ from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import filelink
+import convert
 
 # ───────────────────────── CONFIG ─────────────────────────
 API_ID = int(os.environ["API_ID"])
@@ -136,7 +137,8 @@ START_TEXT = (
     "👋 **Hello {name}!**\n\n"
     "Mama Magnet leech + File-to-Link bot.\n\n"
     "🧲 `/leech magnet:?xt=...` - magnet download & upload\n"
-    "🔗 File ekakata reply karala `/genlink` - direct link"
+    "🔗 File ekakata reply karala `/genlink` - direct link\n"
+    "🎞 Video ekakata reply karala `/changeformat` - MP4 ekata convert"
 )
 
 
@@ -181,6 +183,9 @@ async def cb(_, q):
             "`/leech <magnet>` - download & upload\n"
             "Aliases: /qbleech1, /magent, /magnet\n"
             "`/genlink` - file ekakata reply karanna, direct link ekak denawa\n"
+            "`/changeformat` - video ekakata reply karanna, MP4 ekata convert karanawa\n"
+            "`/setposter` - photo ekakata reply karanna, video thumbnail eka widihata\n"
+            "`/delposter` - poster eka ain karanna\n"
             "`/disk` - free disk space\n`/id` - your Telegram ID\n\n"
             "Split una files join karanna: `cat file.mkv.* > file.mkv`",
             reply_markup=back_kb())
@@ -479,6 +484,7 @@ async def main():
     web_app = web.Application()
     web_app.router.add_get("/", health)
     filelink.register(app, web_app, authorized)
+    convert.register(app, authorized, QUEUE, DL_DIR)
 
     runner = web.AppRunner(web_app)
     await runner.setup()
