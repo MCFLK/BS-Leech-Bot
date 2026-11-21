@@ -208,7 +208,9 @@ def register(app, authorized, lock, dl_dir):
         mode = "Remuxing (quality loss na)" if (v_copy and a_copy) else "Re-encoding (x264/AAC)"
 
         base = os.path.splitext(os.path.basename(src))[0]
-        out_path = os.path.join(work, base + ".mp4")
+        out_dir = os.path.join(work, "out")
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, base + ".mp4")  # separate folder: input already .mp4 nam same name error eka na
         cmd = ["ffmpeg", "-y", "-i", src, "-map", "0:v:0"]
         if a:
             cmd += ["-map", "0:a:0"]
