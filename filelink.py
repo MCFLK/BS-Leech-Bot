@@ -1,5 +1,6 @@
 import os
 import re
+import asyncio
 import hmac
 import hashlib
 import mimetypes
@@ -127,14 +128,30 @@ def register(app, web_app, authorized):
             headers["Content-Range"] = f"bytes {start}-{end}/{size}"
 
         resp = web.StreamResponse(status=status, headers=headers)
-        await resp.prepare(request)
         if request.method == "HEAD":
+            await resp.prepare(request)
             return resp
 
+        # First chunk ekak ganna try karanawa headers yawanna kalin.
+        # Telegram eken error awoth browser eka 0 B/s eke hangila inna ekata wada, clear error ekak penawa.
+        gen = app.stream_media(msg, offset=start // CHUNK)
+        try:
+            first = await asyncio.wait_for(gen.__anext__(), timeout=60)
+        except Exception as e:
+            print(f"[filelink] first chunk error mid={mid} size={size}: {e!r}")
+            return web.Response(status=502, text=f"Telegram stream error: {e!r}")
+
+        await resp.prepare(request)
         skip = start % CHUNK
         remaining = length
+
+        async def chunks():
+            yield first
+            async for c in gen:
+                yield c
+
         try:
-            async for chunk in app.stream_media(msg, offset=start // CHUNK):
+            async for chunk in chunks():
                 if skip:
                     chunk = chunk[skip:]
                     skip = 0
@@ -146,6 +163,8 @@ def register(app, web_app, authorized):
                     break
         except (ConnectionResetError, ConnectionError):
             pass
+        except Exception as e:
+            print(f"[filelink] stream error mid={mid}: {e!r}")
         return resp
 
     async def dl_handler(request):
